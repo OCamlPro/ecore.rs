@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ecore:EPackage xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:ecore="http://www.eclipse.org/emf/2002/Ecore" name="laboratory">
+  <eClassifiers xsi:type="ecore:EClass" name="Person" abstract="true">
+    <eAnnotations source="simpleannotation">
+      <details key="simpleannotation" value="Annotation value"/>
+    </eAnnotations>
+    <eOperations name="setName" eType="ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EString">
+      <eParameters name="name" lowerBound="1" eType="ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EInt"/>
+    </eOperations>
+    <eStructuralFeatures xsi:type="ecore:EAttribute" name="name" eType="ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EString"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="Student" eSuperTypes="#//Person">
+    <eStructuralFeatures xsi:type="ecore:EAttribute" name="kind" lowerBound="1" eType="#//StudentKind"/>
+    <eStructuralFeatures xsi:type="ecore:EReference" name="advisor" eType="#//Teacher"
+        eOpposite="#//Teacher/advises"/>
+    <eStructuralFeatures xsi:type="ecore:EReference" name="enrolls" lowerBound="1"
+        eType="#//Course"/>
+    <eStructuralFeatures xsi:type="ecore:EAttribute" name="StudentID" eType="ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EString"
+        iD="true"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="Teacher" eSuperTypes="#//Person #//Researcher">
+    <eStructuralFeatures xsi:type="ecore:EReference" name="advises" upperBound="-1"
+        eType="#//Student" eOpposite="#//Student/advisor"/>
+    <eStructuralFeatures xsi:type="ecore:EAttribute" name="address" eType="#//Address"/>
+    <eStructuralFeatures xsi:type="ecore:EReference" name="teaches" upperBound="-1"
+        eType="#//Course"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EEnum" name="StudentKind">
+    <eLiterals name="MASTER"/>
+    <eLiterals name="PHD" value="1"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="Course">
+    <eOperations name="subscribe" eType="#//Student"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EDataType" name="Address" instanceTypeName="newDataType2"/>
+  <eClassifiers xsi:type="ecore:EClass" name="Laboratory" eSuperTypes="#//ILaboratory">
+    <eStructuralFeatures xsi:type="ecore:EReference" name="researchers" upperBound="-1"
+        eType="#//Teacher" containment="true"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="ILaboratory" abstract="true" interface="true">
+    <eOperations name="addMember"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="Researcher" abstract="true">
+    <eStructuralFeatures xsi:type="ecore:EReference" name="manages" upperBound="-1"
+        eType="#//Researcher"/>
+  </eClassifiers>
+</ecore:EPackage>

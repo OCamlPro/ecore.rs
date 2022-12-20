@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ecore:EPackage xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:ecore="http://www.eclipse.org/emf/2002/Ecore" name="rootpackage">
+  <eClassifiers xsi:type="ecore:EClass" name="AbstractClass1" abstract="true">
+    <eAnnotations source="simpleannotation">
+      <details key="simpleannotation" value="Annotation value"/>
+    </eAnnotations>
+    <eOperations name="simpleOperation1" eType="ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EString">
+      <eParameters name="inputParameter" lowerBound="1" eType="ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EInt"/>
+    </eOperations>
+    <eStructuralFeatures xsi:type="ecore:EAttribute" name="name" eType="ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EString"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="ConcreteClass1" eSuperTypes="#//AbstractClass1">
+    <eStructuralFeatures xsi:type="ecore:EAttribute" name="newAttribute" lowerBound="1"
+        eType="#//EnumDefinition"/>
+    <eStructuralFeatures xsi:type="ecore:EReference" name="refersClass2" eType="#//ConcreteClass2"
+        eOpposite="#//ConcreteClass2/refersClass2"/>
+    <eStructuralFeatures xsi:type="ecore:EReference" name="simple1_1_Reference" lowerBound="1"
+        eType="#//ConcreteClass3"/>
+    <eStructuralFeatures xsi:type="ecore:EAttribute" name="IDAtribute" eType="ecore:EDataType http://www.eclipse.org/emf/2002/Ecore#//EString"
+        iD="true"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="ConcreteClass2" eSuperTypes="#//AbstractClass1 #//AbstractClass2">
+    <eStructuralFeatures xsi:type="ecore:EReference" name="refersClass2" upperBound="-1"
+        eType="#//ConcreteClass1" eOpposite="#//ConcreteClass1/refersClass2"/>
+    <eStructuralFeatures xsi:type="ecore:EAttribute" name="newAttribute" eType="#//DataType1"/>
+    <eStructuralFeatures xsi:type="ecore:EReference" name="simple1_N_Reference" upperBound="-1"
+        eType="#//ConcreteClass3"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EEnum" name="EnumDefinition">
+    <eLiterals name="enumValue1"/>
+    <eLiterals name="enumValue2" value="1"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="ConcreteClass3">
+    <eOperations name="simpleOperation2" eType="#//ConcreteClass1"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EDataType" name="DataType1" instanceTypeName="newDataType2"/>
+  <eClassifiers xsi:type="ecore:EClass" name="ConcreteClass4" eSuperTypes="#//Interface1">
+    <eStructuralFeatures xsi:type="ecore:EReference" name="containmentReference" upperBound="-1"
+        eType="#//ConcreteClass2" containment="true"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="Interface1" abstract="true" interface="true">
+    <eOperations name="method1"/>
+  </eClassifiers>
+  <eClassifiers xsi:type="ecore:EClass" name="AbstractClass2" abstract="true"/>
+</ecore:EPackage>
