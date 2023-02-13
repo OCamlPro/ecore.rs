@@ -5,6 +5,9 @@ prelude! {
 pub trait HasAnnots {
     fn annotations(&self) -> &Annots;
     fn annotations_mut(&mut self) -> &mut Annots;
+    fn add_annotation(&mut self, annot: Annot) {
+        self.annotations_mut().push(annot)
+    }
 }
 
 pub trait HasStructural {

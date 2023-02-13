@@ -139,3 +139,21 @@ where
         s
     }
 }
+
+/// True if the input string is a valid identifier.
+pub fn is_valid_ident(s: impl AsRef<str>) -> bool {
+    let s = s.as_ref();
+
+    let mut chars = s.chars();
+
+    match chars.next() {
+        None => return false,
+        Some(c) => {
+            if !c.is_alphabetic() {
+                return false;
+            }
+        }
+    }
+
+    chars.all(|c| c.is_alphanumeric() || c == '_')
+}

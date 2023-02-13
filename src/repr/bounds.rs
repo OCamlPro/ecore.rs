@@ -58,6 +58,10 @@ impl Bounds {
         Ok(Self { lbound, ubound })
     }
 
+    pub fn default_operation() -> Res<Self> {
+        Self::new(0, Some(1))
+    }
+
     /// Parses some bounds.
     ///
     /// The default for `lbound` is `1`, and the default for `ubound` is `max(lbound, 1)`.

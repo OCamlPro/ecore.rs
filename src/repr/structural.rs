@@ -41,21 +41,35 @@ pub struct Structural {
     pub kind: Typ,
     pub typ: idx::Class,
     pub bounds: Bounds,
+    pub annotations: repr::Annots,
     /// No idea what this is, corresponds to the attribute `containment`.
     pub containment: bool,
     /// No idea what this is, corresponds to the attribute `iD`.
     pub is_id: bool,
 }
+impl HasAnnots for Structural {
+    fn annotations(&self) -> &repr::Annots {
+        &self.annotations
+    }
+    fn annotations_mut(&mut self) -> &mut repr::Annots {
+        &mut self.annotations
+    }
+}
 impl Structural {
-    pub fn new(name: impl Into<String>, kind: Typ, typ: idx::Class, bounds: Bounds) -> Self {
-        Self {
-            name: name.into(),
+    pub fn new(name: impl Into<String>, kind: Typ, typ: idx::Class, bounds: Bounds) -> Res<Self> {
+        let name = name.into();
+        if !is_valid_ident(&name) {
+            bail!("illegal structural feature identifier `{}`", name)
+        }
+        Ok(Self {
+            name,
             kind,
             typ,
             bounds,
+            annotations: repr::Annots::with_capacity(3),
             containment: false,
             is_id: false,
-        }
+        })
     }
 
     pub fn set_containment(&mut self, flag: bool) {

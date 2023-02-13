@@ -702,6 +702,7 @@ impl<'input> Parser<'input> {
 
     pub fn class_operation(&mut self, ctx: &mut ClassCtx) -> Res<repr::Operation> {
         let (mut name, mut typ) = (None, None);
+        let (mut lbound, mut ubound) = (None, None);
         // operations XML tags can be closed directly with `/>`, or have parameters and end with
         // `</eOperations>`; this flag indicates the former
         let mut early_done = false;
@@ -709,6 +710,14 @@ impl<'input> Parser<'input> {
         'attributes: loop {
             let (key, val) = self.xml_ident_attribute()?;
             match key {
+                "lowerBound" => {
+                    self.handle_redef("class", "lowerBound", lbound.as_ref(), val)?;
+                    lbound = Some(val);
+                }
+                "upperBound" => {
+                    self.handle_redef("class", "upperBound", ubound.as_ref(), val)?;
+                    ubound = Some(val);
+                }
                 "name" => {
                     self.handle_redef("operation name", "name", name.as_ref(), val)?;
                     name = Some(val);
@@ -738,7 +747,17 @@ impl<'input> Parser<'input> {
             None
         };
 
-        let mut operation = repr::Operation::new(name, typ);
+        let bounds = {
+            let lbound = if lbound.is_none() { Some("0") } else { lbound };
+            let ubound = if ubound.is_none() { Some("1") } else { ubound };
+            repr::Bounds::from_str(lbound, ubound).context(|| {
+                format!(
+                    "failed to parse `lowerBound`/`upperBound` of  structural feature `{}`",
+                    name,
+                )
+            })?
+        };
+        let mut operation = repr::Operation::new(name, typ, bounds)?;
 
         if !early_done {
             self.ws();
@@ -833,7 +852,7 @@ impl<'input> Parser<'input> {
             )
         })?;
 
-        let mut structural = repr::Structural::new(name, typ, etype, bounds);
+        let mut structural = repr::Structural::new(name, typ, etype, bounds)?;
 
         if let Some(containment) = containment {
             structural.set_containment(helpers::bool(containment)?);

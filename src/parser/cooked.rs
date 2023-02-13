@@ -1,3 +1,5 @@
+use log::warn;
+//TODO(arthur): clean Bound::from_str
 // #![allow(clippy::result_large_err)]
 use xmlparser::{ElementEnd, StrSpan, Stream, TextPos, Token};
 
@@ -8,13 +10,25 @@ use crate::{
     repr::{structural::Typ, Annot, Operation},
 };
 
+/// A user friendly entry-point to this module functionality
+pub fn parse<'input>(input: &'input str, ctx: &mut Ctx) -> WalkResult<'input, ()> {
+    let tknzr = xmlparser::Tokenizer::from(input);
+    let mut cooked_p = ECoreWalker::new(tknzr);
+    cooked_p.start_visit(ctx)
+}
+
 #[derive(Debug)]
-pub enum Error<'stream, E> {
+pub enum Error<'stream> {
     NoMoreTokens,
     LexingError {
         inner: xmlparser::Error,
     },
     UnexpectedToken {
+        textpos: TextPos,
+        expected: &'static str,
+        found: &'stream str,
+    },
+    UnsupportedToken {
         textpos: TextPos,
         expected: &'static str,
         found: &'stream str,
@@ -31,8 +45,8 @@ pub enum Error<'stream, E> {
         expected: &'static str,
         textpos: TextPos,
     },
-    VisitorError {
-        inner: E,
+    PreludeError {
+        inner: PrError,
         textpos: TextPos,
     },
 }
@@ -42,61 +56,78 @@ fn textpos_from_token(stream: &Stream<'_>, token: &Token<'_>) -> TextPos {
     stream.gen_text_pos_from(span.start())
 }
 
-impl<'stream, E: std::fmt::Debug> std::fmt::Display for Error<'stream, E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+#[derive(Debug)]
+pub struct OwningError {
+    pub msg: String,
+    pub position: Option<TextPos>,
+}
+
+impl<'stream> Error<'stream> {
+    pub fn into_owning(self) -> OwningError {
+        let msg;
+        let position;
         match self {
-            Error::NoMoreTokens => write!(f, "Premature end of file"),
-            Error::LexingError { inner } => write!(f, "There was an error lexing the XML: {inner}"),
+            Error::NoMoreTokens => {
+                msg = "Premature end of file".into();
+                position = None
+            }
+            Error::LexingError { inner } => {
+                msg = format!("There was an error lexing the XML: {inner}.");
+                position = None
+            }
             Error::UnexpectedToken {
                 textpos,
                 expected,
                 found,
             } => {
-                let col = textpos.col;
-                let line = textpos.row;
-                write!(
-                    f,
-                    "Unexpected token \"{found}\" line {line}, col {col}. Expected: {expected}"
-                )
+                msg = format!("Unexpected token \"{found}\". Expected: {expected}.");
+                position = Some(textpos)
             }
-            Error::MissingExpected { expected, textpos } => {
-                let col = textpos.col;
-                let line = textpos.row;
-                write!(
-                    f,
-                    "Missing expected expected {expected} line {line}, col {col}."
-                )
-            }
-            Error::VisitorError { inner, textpos } => {
-                let col = textpos.col;
-                let line = textpos.row;
-                write!(f, "Inner visitor error: {inner:?} line {line} col {col}")
+            Error::UnsupportedToken {
+                textpos,
+                expected,
+                found,
+            } => {
+                msg = format!("Unsupported token \"{found}\". Supported: {expected}.");
+                position = Some(textpos)
             }
             Error::BoolParseError { str_span, stream } => {
                 let s = str_span.as_str();
-                let textpos = stream.gen_text_pos_from(str_span.start());
-                let col = textpos.col;
-                let line = textpos.row;
-                write!(
-                    f,
-                    "Cannot interpret \"{s}\" as a boolean, line {line}, col {col}."
-                )
+                msg = format!("Cannot interpret \"{s}\" as a boolean.");
+                position = Some(stream.gen_text_pos_from(str_span.start()));
             }
             Error::MultipleETypesParseError { str_span, stream } => {
                 let s = str_span.as_str();
-                let textpos = stream.gen_text_pos_from(str_span.start());
-                let col = textpos.col;
-                let line = textpos.row;
-                write!(
-                    f,
-                    "Cannot parse eTypes from \"{s}\", line {line}, col {col}."
-                )
+                msg = format!("Cannot parse eTypes from \"{s}\".");
+                position = Some(stream.gen_text_pos_from(str_span.start()));
             }
+            Error::MissingExpected { expected, textpos } => {
+                msg = format!("Missing expected expected {expected}");
+                position = Some(textpos)
+            }
+            Error::PreludeError { inner, textpos } => {
+                msg = format!("{inner}");
+                position = Some(textpos)
+            }
+        }
+        OwningError { msg, position }
+    }
+}
+
+impl Display for OwningError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.position {
+            Some(textpos) => {
+                let col = textpos.col;
+                let row = textpos.row;
+                write!(f, "Line {}, Col {}: {}", row, col, self.msg)
+            }
+            None => write!(f, "{}", self.msg),
         }
     }
 }
 
-impl<'stream, E> Error<'stream, E> {
+impl<'stream> Error<'stream> {
     fn unexpected_token(
         tkn: Token<'stream>,
         stream: Stream<'stream>,
@@ -109,12 +140,25 @@ impl<'stream, E> Error<'stream, E> {
             found: tkn.span().as_str(),
         }
     }
+
+    fn unsupported_token(
+        tkn: Token<'stream>,
+        stream: Stream<'stream>,
+        expected: &'static str,
+    ) -> Self {
+        let textpos = textpos_from_token(&stream, &tkn);
+        Self::UnsupportedToken {
+            textpos,
+            expected,
+            found: tkn.span().as_str(),
+        }
+    }
 }
 
-fn parse_xml_bool<'stream, V>(
+fn parse_xml_bool<'stream>(
     s: StrSpan<'stream>,
     stream: Stream<'stream>,
-) -> WalkResult<'stream, bool, V> {
+) -> WalkResult<'stream, bool> {
     match s.as_str() {
         "true" => Ok(true),
         "false" => Ok(false),
@@ -171,35 +215,17 @@ fn parse_e_types<'s>(mut s: &'s str, acc: &mut Vec<&'s str>) -> Result<(), ()> {
     Ok(())
 }
 
-impl<'stream, E: std::fmt::Debug> std::error::Error for Error<'stream, E> {}
-
-impl<E> From<xmlparser::Error> for Error<'_, E> {
+impl From<xmlparser::Error> for Error<'_> {
     fn from(inner: xmlparser::Error) -> Self {
         Error::LexingError { inner }
     }
 }
 
-pub type WalkResult<'a, T, E> = Result<T, Error<'a, E>>;
+pub type WalkResult<'a, T> = Result<T, Error<'a>>;
 
 #[derive(Debug, Clone)]
 pub struct ECoreWalker<'a> {
     inner: xmlparser::Tokenizer<'a>,
-}
-
-trait Annotable {
-    fn add_annotation(&mut self, annot: Annot);
-}
-
-impl Annotable for ClassCtx<'_, '_> {
-    fn add_annotation(&mut self, annot: Annot) {
-        ClassCtx::add_annotation(self, annot)
-    }
-}
-
-impl Annotable for PathCtx<'_> {
-    fn add_annotation(&mut self, annot: Annot) {
-        PathCtx::add_annotation(self, annot)
-    }
 }
 
 impl<'a> ECoreWalker<'a> {
@@ -207,7 +233,7 @@ impl<'a> ECoreWalker<'a> {
         Self { inner }
     }
 
-    fn next_token<E>(&mut self) -> WalkResult<'a, Token<'a>, E> {
+    fn next_token(&mut self) -> WalkResult<'a, Token<'a>> {
         loop {
             let tkn = self.inner.next().ok_or(Error::NoMoreTokens)??;
             if !matches!(tkn, Token::Text { .. }) {
@@ -216,8 +242,8 @@ impl<'a> ECoreWalker<'a> {
         }
     }
 
-    pub fn start_visit(&mut self, ctx: &mut Ctx) -> WalkResult<'a, (), PrError> {
-        let mut patch_ctx = ctx.enter_root_pack().map_err(|inner| Error::VisitorError {
+    pub fn start_visit(&mut self, ctx: &mut Ctx) -> WalkResult<'a, ()> {
+        let mut patch_ctx = ctx.enter_root_pack().map_err(|inner| Error::PreludeError {
             inner,
             textpos: self.stream().gen_text_pos(),
         })?;
@@ -255,7 +281,7 @@ impl<'a> ECoreWalker<'a> {
         }
     }
 
-    fn walk_package_inner(&mut self, pctx: &mut PathCtx) -> WalkResult<'a, (), PrError> {
+    fn walk_package_inner(&mut self, pctx: &mut PathCtx) -> WalkResult<'a, ()> {
         let mut found_name = false;
         loop {
             let tkn = self.next_token()?;
@@ -267,7 +293,7 @@ impl<'a> ECoreWalker<'a> {
                     ..
                 } if prefix.is_empty() && "name" == local => {
                     pctx.add_and_enter_sub_pack_mut(value.as_str())
-                        .map_err(|inner| Error::VisitorError {
+                        .map_err(|inner| Error::PreludeError {
                             inner,
                             textpos: self.stream().gen_text_pos(),
                         })?;
@@ -288,11 +314,12 @@ impl<'a> ECoreWalker<'a> {
                     }
                 }
                 _ => {
-                    return Err(Error::unexpected_token(
+                    let err = Error::unsupported_token(
                         tkn,
                         self.stream(),
                         "name attribute for ecore:EPackage element",
-                    ))
+                    );
+                    warn!("{}", err.into_owning());
                 }
             }
         }
@@ -319,7 +346,7 @@ impl<'a> ECoreWalker<'a> {
                     end: ElementEnd::Close(prefix, local),
                     ..
                 } if prefix == "ecore" && local == "EPackage" => {
-                    pctx.enter_sup_pack().map_err(|inner| Error::VisitorError {
+                    pctx.enter_sup_pack().map_err(|inner| Error::PreludeError {
                         inner,
                         textpos: self.stream().gen_text_pos(),
                     })?;
@@ -343,7 +370,7 @@ impl<'a> ECoreWalker<'a> {
         self.inner.stream()
     }
 
-    fn walk_classifiers_inner(&mut self, pctx: &mut PathCtx) -> WalkResult<'a, (), PrError> {
+    fn walk_classifiers_inner(&mut self, pctx: &mut PathCtx) -> WalkResult<'a, ()> {
         let mut xsi_type = None;
         let mut name = None;
         let mut r#abstract = None;
@@ -358,50 +385,36 @@ impl<'a> ECoreWalker<'a> {
                     local,
                     value,
                     ..
-                } if prefix.is_empty() && local == "interface" => {
-                    interface = Some(parse_xml_bool(value, self.stream())?)
-                }
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value,
-                    ..
-                } if prefix.is_empty() && local == "name" => name = Some(value.as_str()),
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value,
-                    ..
-                } if prefix.is_empty() && local == "instanceTypeName" => {
-                    instance_type_name = Some(value.as_str())
-                }
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value,
-                    ..
-                } if prefix.is_empty() && local == "eSuperTypes" => {
-                    parse_e_types(value.as_str(), &mut e_super_types).map_err(|()| {
-                        Error::MultipleETypesParseError {
-                            str_span: value,
-                            stream: self.stream(),
-                        }
-                    })?;
-                }
+                } if prefix.is_empty() => match local.as_str() {
+                    "interface" => interface = Some(parse_xml_bool(value, self.stream())?),
+                    "name" => name = Some(value.as_str()),
+                    "instanceTypeName" => instance_type_name = Some(value.as_str()),
+                    "eSuperTypes" => {
+                        parse_e_types(value.as_str(), &mut e_super_types).map_err(|()| {
+                            Error::MultipleETypesParseError {
+                                str_span: value,
+                                stream: self.stream(),
+                            }
+                        })?;
+                    }
+                    "abstract" => r#abstract = Some(parse_xml_bool(value, self.stream())?),
+                    _ => {
+                        let err = Error::unsupported_token(
+                            tkn,
+                            self.stream(),
+                            "known attribute \
+                            (interface, name, instanceTypeName, xsi:type, eSuperTypes or abstract) \
+                            for eClassifier element",
+                        );
+                        warn!("{}", err.into_owning());
+                    }
+                },
                 Token::Attribute {
                     prefix,
                     local,
                     value,
                     ..
                 } if prefix == "xsi" && local == "type" => xsi_type = Some(value.as_str()),
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value,
-                    ..
-                } if prefix.is_empty() && local == "abstract" => {
-                    r#abstract = Some(parse_xml_bool(value, self.stream())?)
-                }
                 Token::ElementEnd { end, .. } => {
                     let name = name.ok_or(Error::MissingExpected {
                         expected: "name attribute for eClassifier element",
@@ -413,7 +426,7 @@ impl<'a> ECoreWalker<'a> {
                     })?;
                     let mut class = pctx
                         .enter_class(xsi_type, name, instance_type_name, r#abstract, interface)
-                        .map_err(|inner| Error::VisitorError {
+                        .map_err(|inner| Error::PreludeError {
                             inner,
                             textpos: self.stream().gen_text_pos(),
                         })?;
@@ -421,7 +434,7 @@ impl<'a> ECoreWalker<'a> {
                         let estp =
                             class
                                 .resolve_etype(estp)
-                                .map_err(|inner| Error::VisitorError {
+                                .map_err(|inner| Error::PreludeError {
                                     inner,
                                     textpos: self.stream().gen_text_pos(),
                                 })?;
@@ -442,59 +455,43 @@ impl<'a> ECoreWalker<'a> {
                     }
                 }
                 _ => {
-                    return Err(Error::unexpected_token(
+                    let err = Error::unsupported_token(
                         tkn,
                         self.stream(),
                         "xsi:type, name or abstract attribute for eClassifier element",
-                    ))
+                    );
+                    warn!("{}", err.into_owning())
                 }
             }
         };
+        let err_msg = "inside an eClassifier, expecting child to be either \
+        eLiterals, eAnnotations, eOperations or eStructuralFeatures";
         loop {
             let tkn = self.next_token()?;
-
             match tkn {
-                Token::ElementStart { prefix, local, .. }
-                    if prefix.is_empty() && local == "eLiterals" =>
-                {
-                    self.walk_literal_inner(&mut class)?
-                }
-                Token::ElementStart { prefix, local, .. }
-                    if prefix.is_empty() && local == "eAnnotations" =>
-                {
-                    self.walk_annotations_inner(&mut class)?
-                }
-                Token::ElementStart { prefix, local, .. }
-                    if prefix.is_empty() && local == "eOperations" =>
-                {
-                    self.walk_operations_inner(&mut class)?
-                }
-                Token::ElementStart { prefix, local, .. }
-                    if prefix.is_empty() && local == "eStructuralFeatures" =>
-                {
-                    self.walk_structural_features_inner(&mut class)?
+                Token::ElementStart { prefix, local, .. } if prefix.is_empty() => {
+                    match local.as_str() {
+                        "eLiterals" => self.walk_literal_inner(&mut class)?,
+                        "eAnnotations" => self.walk_annotations_inner(&mut class)?,
+                        "eOperations" => self.walk_operations_inner(&mut class)?,
+                        "eStructuralFeatures" => self.walk_structural_features_inner(&mut class)?,
+                        _ => return Err(Error::unexpected_token(tkn, self.stream(), err_msg)),
+                    }
                 }
                 Token::ElementEnd {
                     end: ElementEnd::Close(prefix, local),
                     ..
                 } if prefix.is_empty() && local == "eClassifiers" => break,
-                _ => {
-                    return Err(Error::unexpected_token(
-                        tkn,
-                        self.stream(),
-                        "inside an eClassifier, expecting opening of \
-                        1) an eOperations 2) an eAnnotation or 2) a structural feature",
-                    ))
-                }
+                _ => return Err(Error::unexpected_token(tkn, self.stream(), err_msg)),
             };
         }
         Ok(())
     }
 
-    fn walk_annotations_inner<AnnotableCtx: Annotable>(
+    fn walk_annotations_inner<AnnotableCtx: HasAnnots>(
         &mut self,
         ctx: &mut AnnotableCtx,
-    ) -> WalkResult<'a, (), PrError> {
+    ) -> WalkResult<'a, ()> {
         let mut annot = None;
         loop {
             let tkn = self.next_token()?;
@@ -522,11 +519,12 @@ impl<'a> ECoreWalker<'a> {
                     }
                 }
                 _ => {
-                    return Err(Error::unexpected_token(
+                    let err = Error::unsupported_token(
                         tkn,
                         self.stream(),
                         "source attribute for eAnnotation element",
-                    ))
+                    );
+                    warn!("{}", err.into_owning())
                 }
             }
         }
@@ -558,9 +556,11 @@ impl<'a> ECoreWalker<'a> {
         }
         Ok(())
     }
-    fn walk_operations_inner(&mut self, classctx: &mut ClassCtx) -> WalkResult<'a, (), PrError> {
+    fn walk_operations_inner(&mut self, classctx: &mut ClassCtx) -> WalkResult<'a, ()> {
         let mut name = None;
         let mut e_type = None;
+        let mut lower_bound = None;
+        let mut upper_bound = None;
         let mut operation = loop {
             let tkn = self.next_token()?;
             match tkn {
@@ -576,6 +576,18 @@ impl<'a> ECoreWalker<'a> {
                     value,
                     ..
                 } if prefix.is_empty() && local == "eType" => e_type = Some(value.as_str()),
+                Token::Attribute {
+                    prefix,
+                    local,
+                    value: val,
+                    ..
+                } if prefix.is_empty() && local == "lowerBound" => lower_bound = Some(val.as_str()),
+                Token::Attribute {
+                    prefix,
+                    local,
+                    value: val,
+                    ..
+                } if prefix.is_empty() && local == "upperBound" => upper_bound = Some(val.as_str()),
                 Token::ElementEnd { end, .. } => {
                     let name = name.ok_or(Error::MissingExpected {
                         expected: "name attribute for eOperations element",
@@ -583,7 +595,7 @@ impl<'a> ECoreWalker<'a> {
                     })?;
                     let e_type = if let Some(e_type) = e_type {
                         Some(classctx.resolve_etype(e_type).map_err(|inner| {
-                            Error::VisitorError {
+                            Error::PreludeError {
                                 inner,
                                 textpos: self.stream().gen_text_pos(),
                             }
@@ -591,12 +603,20 @@ impl<'a> ECoreWalker<'a> {
                     } else {
                         None
                     };
-                    let operation = Operation::with_capacity(name, e_type, 0);
-                    // vis.enter_operations(name, e_type)
-                    //     .map_err(|inner| Error::VisitorError {
-                    //         inner,
-                    //         textpos: self.stream().gen_text_pos(),
-                    //     })?;
+                    let bounds =
+                        repr::Bounds::from_str(lower_bound, upper_bound).map_err(|inner| {
+                            Error::PreludeError {
+                                inner,
+                                textpos: self.stream().gen_text_pos(),
+                            }
+                        })?;
+                    let operation =
+                        Operation::with_capacity(name, e_type, 0, bounds).map_err(|inner| {
+                            Error::PreludeError {
+                                inner,
+                                textpos: self.stream().gen_text_pos(),
+                            }
+                        })?;
                     match end {
                         ElementEnd::Open => break operation,
                         ElementEnd::Close(_, _) => {
@@ -607,16 +627,18 @@ impl<'a> ECoreWalker<'a> {
                             ))
                         }
                         ElementEnd::Empty => {
+                            classctx.add_operation(operation);
                             return Ok(());
                         }
                     }
                 }
                 _ => {
-                    return Err(Error::unexpected_token(
+                    let err = Error::unsupported_token(
                         tkn,
                         self.stream(),
-                        "eType or name attribute for eClassifier element",
-                    ))
+                        "eType, bounds or name attribute for eOperation element",
+                    );
+                    warn!("{}", err.into_owning())
                 }
             }
         };
@@ -629,15 +651,16 @@ impl<'a> ECoreWalker<'a> {
                 {
                     self.walk_parameters_inner(classctx, &mut operation)?
                 }
+                Token::ElementStart { prefix, local, .. }
+                    if prefix.is_empty() && local == "eAnnotations" =>
+                {
+                    self.walk_annotations_inner(&mut operation)?
+                }
                 Token::ElementEnd {
                     end: ElementEnd::Close(prefix, local),
                     ..
                 } if prefix.is_empty() && local == "eOperations" => {
                     classctx.add_operation(operation);
-                    // vis.exit_operations().map_err(|inner| Error::VisitorError {
-                    //     inner,
-                    //     textpos: self.stream().gen_text_pos(),
-                    // })?;
                     break;
                 }
                 _ => {
@@ -652,7 +675,7 @@ impl<'a> ECoreWalker<'a> {
         Ok(())
     }
 
-    fn walk_details_inner(&mut self, annot: &mut Annot) -> WalkResult<'a, (), PrError> {
+    fn walk_details_inner(&mut self, annot: &mut Annot) -> WalkResult<'a, ()> {
         let mut key = None;
         let mut value = None;
         loop {
@@ -684,27 +707,25 @@ impl<'a> ECoreWalker<'a> {
                     })?;
                     annot
                         .insert(key, value)
-                        .map_err(|inner| Error::VisitorError {
+                        .map_err(|inner| Error::PreludeError {
                             inner,
                             textpos: self.stream().gen_text_pos(),
                         })?;
                     break;
                 }
                 _ => {
-                    return Err(Error::unexpected_token(
+                    let err = Error::unsupported_token(
                         tkn,
                         self.stream(),
                         "key or value attribute for details element",
-                    ))
+                    );
+                    warn!("{}", err.into_owning())
                 }
             }
         }
         Ok(())
     }
-    fn walk_structural_features_inner(
-        &mut self,
-        classctx: &mut ClassCtx,
-    ) -> WalkResult<'a, (), PrError> {
+    fn walk_structural_features_inner(&mut self, classctx: &mut ClassCtx) -> WalkResult<'a, ()> {
         let mut name = None;
         let mut e_type = None;
         let mut xsi_type = None;
@@ -713,6 +734,8 @@ impl<'a> ECoreWalker<'a> {
         let mut e_opposite = None;
         let mut i_d = None;
         let mut containment = None;
+        let err_msg = "Inside strucural feature, expecting an attribute to be one of \
+        containment, iD, eOpposite, lowerBound, upperBound, name, eType";
         loop {
             let tkn = self.next_token()?;
             match tkn {
@@ -721,41 +744,19 @@ impl<'a> ECoreWalker<'a> {
                     local,
                     value,
                     ..
-                } if prefix.is_empty() && local == "containment" => {
-                    containment = Some(parse_xml_bool(value, self.stream())?)
-                }
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value,
-                    ..
-                } if prefix.is_empty() && local == "iD" => {
-                    i_d = Some(parse_xml_bool(value, self.stream())?)
-                }
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value: val,
-                    ..
-                } if prefix.is_empty() && local == "eOpposite" => e_opposite = Some(val.as_str()),
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value: val,
-                    ..
-                } if prefix.is_empty() && local == "lowerBound" => lower_bound = Some(val.as_str()),
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value: val,
-                    ..
-                } if prefix.is_empty() && local == "upperBound" => upper_bound = Some(val.as_str()),
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value,
-                    ..
-                } if prefix.is_empty() && local == "name" => name = Some(value.as_str()),
+                } if prefix.is_empty() => match local.as_str() {
+                    "containment" => containment = Some(parse_xml_bool(value, self.stream())?),
+                    "iD" => i_d = Some(parse_xml_bool(value, self.stream())?),
+                    "eOpposite" => e_opposite = Some(value.as_str()),
+                    "lowerBound" => lower_bound = Some(value.as_str()),
+                    "upperBound" => upper_bound = Some(value.as_str()),
+                    "name" => name = Some(value.as_str()),
+                    "eType" => e_type = Some(value.as_str()),
+                    _ => {
+                        let err = Error::unsupported_token(tkn, self.stream(), err_msg);
+                        warn!("{}", err.into_owning())
+                    }
+                },
                 Token::Attribute {
                     prefix,
                     local,
@@ -777,16 +778,7 @@ impl<'a> ECoreWalker<'a> {
                         Some(kind)
                     }
                 }
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value: val,
-                    ..
-                } if prefix.is_empty() && local == "eType" => e_type = Some(val.as_str()),
-                Token::ElementEnd {
-                    end: ElementEnd::Empty,
-                    ..
-                } => {
+                Token::ElementEnd { end, .. } => {
                     let name = name.ok_or(Error::MissingExpected {
                         expected: "name attribute for eStructuralFeatures element",
                         textpos: self.stream().gen_text_pos(),
@@ -805,34 +797,64 @@ impl<'a> ECoreWalker<'a> {
                     let bounds =
                         xsi_type
                             .parse_bounds(lower_bound, upper_bound)
-                            .map_err(|inner| Error::VisitorError {
+                            .map_err(|inner| Error::PreludeError {
                                 inner,
                                 textpos: self.stream().gen_text_pos(),
                             })?;
                     let typ =
                         classctx
                             .resolve_etype(e_type)
-                            .map_err(|inner| Error::VisitorError {
+                            .map_err(|inner| Error::PreludeError {
                                 inner,
                                 textpos: self.stream().gen_text_pos(),
                             })?;
-                    let mut structural = repr::Structural::new(name, xsi_type, typ, bounds);
+                    let mut structural = repr::Structural::new(name, xsi_type, typ, bounds)
+                        .map_err(|inner| Error::PreludeError {
+                            inner,
+                            textpos: self.stream().gen_text_pos(),
+                        })?;
                     if let Some(b) = containment {
                         structural.set_containment(b);
                     }
                     if let Some(b) = i_d {
                         structural.set_is_id(b);
                     }
+                    match end {
+                        ElementEnd::Close(_, _) => {
+                            return Err(Error::unexpected_token(tkn, self.stream(), err_msg))
+                        }
+                        ElementEnd::Empty => (),
+                        ElementEnd::Open => {
+                            let err_msg = "Inside an eStructural, expecting an eAnnotation.";
+                            loop {
+                                let tkn = self.next_token()?;
+                                match tkn {
+                                    Token::ElementStart { prefix, local, .. }
+                                        if prefix.is_empty() && local == "eAnnotations" =>
+                                    {
+                                        self.walk_annotations_inner(&mut structural)?
+                                    }
+                                    Token::ElementEnd {
+                                        end: ElementEnd::Close(prefix, local),
+                                        ..
+                                    } if prefix.is_empty() && local == "eStructuralFeatures" => {
+                                        break
+                                    }
+                                    _ => {
+                                        return Err(Error::unexpected_token(
+                                            tkn,
+                                            self.stream(),
+                                            err_msg,
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    }
                     classctx.add_structural(structural);
                     break;
                 }
-                _ => {
-                    return Err(Error::unexpected_token(
-                        tkn,
-                        self.stream(),
-                        "name, eType or xsi:type attribute for eStructuralFeatures element",
-                    ))
-                }
+                _ => return Err(Error::unexpected_token(tkn, self.stream(), err_msg)),
             }
         }
         Ok(())
@@ -842,11 +864,13 @@ impl<'a> ECoreWalker<'a> {
         &mut self,
         classctx: &mut ClassCtx,
         ope: &mut Operation,
-    ) -> WalkResult<'a, (), PrError> {
+    ) -> WalkResult<'a, ()> {
         let mut name = None;
         let mut lower_bound = None;
         let mut upper_bound = None;
         let mut e_type = None;
+        let err_msg = "Inside parameters, expecting the attribute to be one of \
+        name, lowerBound, upperBound, eType";
         loop {
             let tkn = self.next_token()?;
             match tkn {
@@ -855,25 +879,16 @@ impl<'a> ECoreWalker<'a> {
                     local,
                     value,
                     ..
-                } if prefix.is_empty() && local == "name" => name = Some(value.as_str()),
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value: val,
-                    ..
-                } if prefix.is_empty() && local == "lowerBound" => lower_bound = Some(val.as_str()),
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value: val,
-                    ..
-                } if prefix.is_empty() && local == "upperBound" => upper_bound = Some(val.as_str()),
-                Token::Attribute {
-                    prefix,
-                    local,
-                    value: val,
-                    ..
-                } if prefix.is_empty() && local == "eType" => e_type = Some(val.as_str()),
+                } if prefix.is_empty() => match local.as_str() {
+                    "name" => name = Some(value.as_str()),
+                    "lowerBound" => lower_bound = Some(value.as_str()),
+                    "upperBound" => upper_bound = Some(value.as_str()),
+                    "eType" => e_type = Some(value.as_str()),
+                    _ => {
+                        let err = Error::unexpected_token(tkn, self.stream(), err_msg);
+                        warn!("{}", err.into_owning())
+                    }
+                },
                 Token::ElementEnd {
                     end: ElementEnd::Empty,
                     ..
@@ -889,39 +904,35 @@ impl<'a> ECoreWalker<'a> {
                         })?;
                         classctx
                             .resolve_etype(e_type)
-                            .map_err(|inner| Error::VisitorError {
+                            .map_err(|inner| Error::PreludeError {
                                 inner,
                                 textpos: self.stream().gen_text_pos(),
                             })?
                     };
                     let bounds =
                         repr::Bounds::from_str(lower_bound, upper_bound).map_err(|inner| {
-                            Error::VisitorError {
+                            Error::PreludeError {
                                 inner,
                                 textpos: self.stream().gen_text_pos(),
                             }
                         })?;
                     let param = repr::Param::new(name, bounds, e_type);
                     ope.add_parameter(param);
-                    // vis.do_parameters(name, upper_bound, lower_bound, e_type)
-                    //     .map_err(|inner| Error::VisitorError {
-                    //         inner,
-                    //         textpos: self.stream().gen_text_pos(),
-                    //     })?;
                     break;
                 }
                 _ => {
-                    return Err(Error::unexpected_token(
+                    let err = Error::unsupported_token(
                         tkn,
                         self.stream(),
                         "key or value attribute for eParameters element",
-                    ))
+                    );
+                    warn!("{}", err.into_owning())
                 }
             }
         }
         Ok(())
     }
-    fn walk_literal_inner(&mut self, class_ctx: &mut ClassCtx) -> WalkResult<'a, (), PrError> {
+    fn walk_literal_inner(&mut self, class_ctx: &mut ClassCtx) -> WalkResult<'a, ()> {
         let mut name = None;
         let mut value = None;
         loop {
@@ -949,19 +960,15 @@ impl<'a> ECoreWalker<'a> {
                     })?;
                     let lit = repr::ELit::new(name, value);
                     class_ctx.add_literal(lit);
-                    // vis.do_literal(name, value)
-                    //     .map_err(|inner| Error::VisitorError {
-                    //         inner,
-                    //         textpos: self.stream().gen_text_pos(),
-                    //     })?;
                     break;
                 }
                 _ => {
-                    return Err(Error::unexpected_token(
+                    let err = Error::unsupported_token(
                         tkn,
                         self.stream(),
                         "name, or value attribute for literal element",
-                    ))
+                    );
+                    warn!("{}", err.into_owning())
                 }
             }
         }

@@ -119,7 +119,7 @@ impl Ctx {
 
     pub fn parse(txt: impl AsRef<str>) -> Res<Self> {
         let mut slf = Self::with_capacity(7, 7);
-        parser::raw::Parser::parse(txt.as_ref(), &mut slf)?;
+        parser::cooked::parse(txt.as_ref(), &mut slf)?;
         slf.finalize()?;
         Ok(slf)
     }
@@ -381,6 +381,10 @@ impl Ctx {
     pub fn add_pack(&mut self, path: Path, name: impl Into<String>) -> Res<idx::Pack> {
         let name = name.into();
 
+        if !is_valid_ident(&name) {
+            bail!("illegal package identifier `{}`", name)
+        }
+
         // do we know this package?
         if let Ok(p_idx) = self.pack_idx(&path, &name) {
             // either a definition for a previously forward-ref-ed package or a redef
@@ -450,6 +454,10 @@ impl Ctx {
         is_interface: Option<bool>,
     ) -> Res<idx::Class> {
         let name = name.into();
+
+        if !is_valid_ident(&name) {
+            bail!("illegal class identifier `{}`", name)
+        }
 
         macro_rules! build_class {
             ($idx:expr) => {
@@ -538,7 +546,7 @@ impl Ctx {
     }
 
     /// Classes appear in the order they were added in.
-    pub fn classes(&self) -> &[Class] {
+    pub fn classes(&self) -> &idx::ClassMap<Class> {
         &self.classes
     }
     pub fn class_indices<'me>(&'me self) -> impl Iterator<Item = idx::Class> + 'me {
@@ -606,6 +614,16 @@ pub struct PathCtx<'a> {
     ctx: &'a mut Ctx,
 }
 
+impl<'a> HasAnnots for PathCtx<'a> {
+    fn annotations(&self) -> &repr::Annots {
+        self.current().annotations()
+    }
+
+    fn annotations_mut(&mut self) -> &mut repr::Annots {
+        self.current_mut().annotations_mut()
+    }
+}
+
 impl<'a> std::ops::Index<idx::Class> for PathCtx<'a> {
     type Output = Class;
     fn index(&self, idx: idx::Class) -> &Self::Output {
@@ -633,6 +651,10 @@ impl<'a> std::ops::IndexMut<idx::Class> for PathCtx<'a> {
 impl<'a> PathCtx<'a> {
     pub fn current(&self) -> &Pack {
         &self.ctx[self.path.last()]
+    }
+
+    pub fn current_mut(&mut self) -> &mut Pack {
+        &mut self.ctx[self.path.last()]
     }
 
     pub fn path(&self) -> &Path {
@@ -729,11 +751,6 @@ impl<'a> PathCtx<'a> {
         self.ctx.concrete_classes_in(&self.path)
     }
 
-    /// Adds an annotation to the current package.
-    pub fn add_annotation(&mut self, annot: repr::Annot) {
-        self.ctx[self.path.last()].add_annotation(annot)
-    }
-
     /// Enters a sub-package.
     ///
     /// Error if `sub` is not a sub-package of the current package.
@@ -799,6 +816,16 @@ pub struct ClassCtx<'a, 'b> {
     c_idx: idx::Class,
 }
 
+impl<'a, 'b> HasAnnots for ClassCtx<'a, 'b> {
+    fn annotations(&self) -> &repr::Annots {
+        self.current().annotations()
+    }
+
+    fn annotations_mut(&mut self) -> &mut repr::Annots {
+        self.current_mut().annotations_mut()
+    }
+}
+
 impl<'a, 'b> std::ops::Index<idx::Class> for ClassCtx<'a, 'b> {
     type Output = Class;
     fn index(&self, idx: idx::Class) -> &Self::Output {
@@ -814,6 +841,10 @@ impl<'a, 'b> std::ops::IndexMut<idx::Class> for ClassCtx<'a, 'b> {
 impl<'a, 'b> ClassCtx<'a, 'b> {
     pub fn current(&self) -> &repr::Class {
         &self.ctx[self.c_idx]
+    }
+
+    pub fn current_mut(&mut self) -> &mut repr::Class {
+        &mut self.ctx[self.c_idx]
     }
 
     pub fn path_ctx(&self) -> &PathCtx<'a> {
@@ -834,9 +865,6 @@ impl<'a, 'b> ClassCtx<'a, 'b> {
         repr::Path::resolve_etype(self.ctx, s)
     }
 
-    pub fn add_annotation(&mut self, annot: repr::Annot) {
-        self.ctx[self.c_idx].add_annotation(annot)
-    }
     pub fn add_sup_class(&mut self, sup: idx::Class) {
         self.ctx.add_sup_class(sup, self.c_idx)
     }

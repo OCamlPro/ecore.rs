@@ -160,6 +160,9 @@ impl Path {
         }
 
         if let Some(ident) = last {
+            if !is_valid_ident(ident) {
+                bail!("unexpected etype, `{}` is not a valid identifier", ident)
+            }
             ctx.get_class_idx_or_forward_ref_in(&path, ident)
         } else {
             bail!("illegal empty absolute `eType`: `{}`", s);
@@ -265,6 +268,8 @@ pub struct Operation {
     name: String,
     typ: Option<idx::Class>,
     parameters: Params,
+    annotations: Annots,
+    bounds: Bounds,
 }
 
 pub type Operations = Vec<Operation>;
@@ -274,15 +279,28 @@ impl Operation {
         name: impl Into<String>,
         typ: Option<idx::Class>,
         param_capa: usize,
-    ) -> Self {
-        Self {
-            name: name.into(),
+        bounds: impl Into<Bounds>,
+    ) -> Res<Self> {
+        let name = name.into();
+
+        if !is_valid_ident(&name) {
+            bail!("illegal operation identifier `{}`", name)
+        }
+
+        Ok(Self {
+            name,
             typ: typ,
             parameters: Params::with_capacity(param_capa),
-        }
+            annotations: Default::default(),
+            bounds: bounds.into(),
+        })
     }
-    pub fn new(name: impl Into<String>, typ: Option<idx::Class>) -> Self {
-        Self::with_capacity(name, typ, 3)
+    pub fn new(
+        name: impl Into<String>,
+        typ: Option<idx::Class>,
+        bounds: impl Into<Bounds>,
+    ) -> Res<Self> {
+        Self::with_capacity(name, typ, 3, bounds)
     }
     pub fn add_parameter(&mut self, param: Param) {
         self.parameters.push(param)
@@ -296,6 +314,19 @@ impl Operation {
     }
     pub fn parameters(&self) -> &Params {
         &self.parameters
+    }
+    pub fn bounds(&self) -> &Bounds {
+        &self.bounds
+    }
+}
+
+impl HasAnnots for Operation {
+    fn annotations(&self) -> &Annots {
+        &self.annotations
+    }
+
+    fn annotations_mut(&mut self) -> &mut Annots {
+        &mut self.annotations
     }
 }
 
@@ -404,11 +435,8 @@ impl Class {
         self.inst_name.as_ref().map(|s| s.as_str())
     }
 
-    pub fn annotations(&self) -> &Annots {
-        &self.annotations
-    }
-    pub fn add_annotation(&mut self, annot: Annot) {
-        self.annotations.push(annot)
+    pub fn is_builtin(&self, ctx: &Ctx) -> bool {
+        ctx.builtin_pack() == self.path.last()
     }
 
     pub fn literals(&self) -> &ELits {
@@ -465,6 +493,16 @@ pub struct Pack {
     annotations: Annots,
 }
 
+impl HasAnnots for Pack {
+    fn annotations(&self) -> &Annots {
+        &self.annotations
+    }
+
+    fn annotations_mut(&mut self) -> &mut Annots {
+        &mut self.annotations
+    }
+}
+
 impl Pack {
     pub fn with_capacity(idx: idx::Pack, name: impl Into<String>, sup: Option<idx::Pack>) -> Self {
         Self {
@@ -489,11 +527,11 @@ impl Pack {
         Path::of_idx(ctx, self.idx)
     }
 
-    pub fn annotations(&self) -> &Annots {
-        &self.annotations
+    pub fn is_builtin(&self, ctx: &Ctx) -> bool {
+        ctx.builtin_pack() == self.idx
     }
-    pub fn add_annotation(&mut self, annot: Annot) {
-        self.annotations.push(annot)
+    pub fn is_top(&self, ctx: &Ctx) -> bool {
+        ctx.top_pack() == self.idx
     }
 
     pub fn sup(&self) -> Option<idx::Pack> {

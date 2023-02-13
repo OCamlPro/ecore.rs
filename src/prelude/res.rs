@@ -62,6 +62,7 @@ pub enum ErrorSrc {
         desc: String,
     },
     Std(Box<dyn std::error::Error>),
+    ParserError(parser::cooked::OwningError),
 }
 impl ErrorSrc {
     pub fn new_msg(s: impl Into<String>) -> Self {
@@ -77,7 +78,7 @@ impl ErrorSrc {
         }
     }
     pub fn new_redef(val: impl Into<String>, desc: impl Into<String>) -> Self {
-        Self::Unknown {
+        Self::Redef {
             val: val.into(),
             desc: desc.into(),
         }
@@ -104,6 +105,11 @@ impl From<std::io::Error> for ErrorSrc {
         Self::new_std(s)
     }
 }
+impl<'a> From<parser::cooked::Error<'a>> for ErrorSrc {
+    fn from(value: parser::cooked::Error<'a>) -> Self {
+        Self::ParserError(value.into_owning())
+    }
+}
 
 impl Display for ErrorSrc {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -128,6 +134,7 @@ impl Display for ErrorSrc {
                 write!(fmt, "unexpected {} `{}`", desc, val)
             }
             Std(err) => err.fmt(fmt),
+            ParserError(err) => write!(fmt, "{err}"),
         }
     }
 }

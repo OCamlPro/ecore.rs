@@ -1,2 +1,3 @@
-// pub mod cooked;
+pub mod cooked;
+#[deprecated]
 pub mod raw;
